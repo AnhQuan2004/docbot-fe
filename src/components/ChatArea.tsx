@@ -1,4 +1,4 @@
-import { Send, Sparkles, FileCheck, Loader2, CircleHelp } from "lucide-react";
+import { Send, Sparkles, FileCheck, Loader2, CircleHelp, BookOpen, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { queryDocuments } from "@/lib/api";
 import type { QueryResponse } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface ChatAreaProps {
   isIndexing: boolean;
@@ -27,6 +29,7 @@ interface MessageItem {
   content: string;
   status: "idle" | "loading" | "complete" | "error";
   createdAt: string;
+  references?: string[];
 }
 
 const formatTimestamp = (timestamp?: string) => {
@@ -46,6 +49,27 @@ const extractAnswer = (data: QueryResponse) => {
 
 const STORAGE_PREFIX = "chat-history";
 
+const parseAnswer = (answer: string) => {
+  const matches = Array.from(answer.matchAll(/\[[^\]]+\]/g));
+  const references: string[] = [];
+
+  matches.forEach((match) => {
+    const ref = match[0].slice(1, -1).trim();
+    if (ref && !references.includes(ref)) {
+      references.push(ref);
+    }
+  });
+
+  const content = matches.length
+    ? answer.replace(/\[[^\]]+\]/g, "").replace(/\n{3,}/g, "\n\n").trim()
+    : answer.trim();
+
+  return {
+    content: content.length > 0 ? content : answer.trim(),
+    references,
+  };
+};
+
 export const ChatArea = ({
   isIndexing,
   isReady,
@@ -58,6 +82,10 @@ export const ChatArea = ({
 }: ChatAreaProps) => {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<MessageItem[]>([]);
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [isSending, setIsSending] = useState(false);
   const messageContainerRef = useRef<HTMLDivElement | null>(null);
   const { toast } = useToast();
@@ -65,6 +93,7 @@ export const ChatArea = ({
     () => (conversationId ? `${STORAGE_PREFIX}:${conversationId}` : undefined),
     [conversationId]
   );
+  const [referenceVisibility, setReferenceVisibility] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!messageContainerRef.current) return;
@@ -82,7 +111,11 @@ export const ChatArea = ({
     try {
       const stored = window.localStorage.getItem(storageKey);
       if (stored) {
-        const parsed = JSON.parse(stored) as MessageItem[];
+        const parsedRaw = JSON.parse(stored) as Array<Partial<MessageItem>>;
+        const parsed = parsedRaw.map((item) => ({
+          ...item,
+          references: Array.isArray(item.references) ? item.references : undefined,
+        })) as MessageItem[];
         setMessages(parsed);
       } else {
         setMessages([]);
@@ -91,12 +124,16 @@ export const ChatArea = ({
       console.error("Failed to parse chat history", error);
       setMessages([]);
     }
+
+    return () => {
+      if (!storageKey || typeof window === "undefined") return;
+      window.localStorage.setItem(storageKey, JSON.stringify(messagesRef.current));
+    };
   }, [storageKey]);
 
   useEffect(() => {
-    if (!storageKey || typeof window === "undefined") return;
-    window.localStorage.setItem(storageKey, JSON.stringify(messages));
-  }, [messages, storageKey]);
+    setReferenceVisibility({});
+  }, [conversationId]);
 
   const quickPrompts = useMemo(
     () => [
@@ -134,6 +171,7 @@ export const ChatArea = ({
       content: "",
       status: "loading",
       createdAt,
+      references: [],
     };
 
     setMessages((prev) => [...prev, userMessage, pendingAssistant]);
@@ -143,11 +181,12 @@ export const ChatArea = ({
     try {
       const response = await queryDocuments(question);
       const answer = extractAnswer(response);
+      const { content, references } = parseAnswer(answer);
 
       setMessages((prev) =>
         prev.map((item) =>
           item.id === assistantMessageId
-            ? { ...item, content: answer, status: "complete" }
+            ? { ...item, content, status: "complete", references }
             : item
         )
       );
@@ -157,7 +196,7 @@ export const ChatArea = ({
       setMessages((prev) =>
         prev.map((item) =>
           item.id === assistantMessageId
-            ? { ...item, content: description, status: "error" }
+            ? { ...item, content: description, status: "error", references: [] }
             : item
         )
       );
@@ -186,6 +225,13 @@ export const ChatArea = ({
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const toggleReferences = (messageId: string) => {
+    setReferenceVisibility((prev) => ({
+      ...prev,
+      [messageId]: !prev[messageId],
+    }));
   };
 
   return (
@@ -351,11 +397,61 @@ export const ChatArea = ({
                                   <span>Đang tạo câu trả lời...</span>
                                 </div>
                               ) : (
-                                <pre className="whitespace-pre-wrap break-words font-sans text-[15px]">
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  className="prose prose-sm max-w-none text-foreground prose-headings:text-foreground prose-strong:text-foreground prose-ul:my-2 prose-li:marker:text-primary"
+                                  components={{
+                                    p: ({ children }) => <p className="leading-relaxed">{children}</p>,
+                                    ul: ({ children }) => <ul className="list-disc pl-5 space-y-1">{children}</ul>,
+                                    ol: ({ children }) => <ol className="list-decimal pl-5 space-y-1">{children}</ol>,
+                                    li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                                    code: ({ className, children, ...props }) => {
+                                      const match = /language-(\w+)/.exec(className || "");
+                                      return match ? (
+                                        <pre className="rounded-lg bg-secondary/60 p-3 text-xs font-mono overflow-auto">
+                                          <code className={className}>{children}</code>
+                                        </pre>
+                                      ) : (
+                                        <code className="rounded bg-secondary px-1.5 py-0.5 text-xs" {...props}>
+                                          {children}
+                                        </code>
+                                      );
+                                    },
+                                  }}
+                                >
                                   {item.content}
-                                </pre>
+                                </ReactMarkdown>
                               )}
                             </div>
+                            {item.references && item.references.length > 0 && (
+                              <div className="flex flex-col gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="self-start rounded-full px-3 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                                  onClick={() => toggleReferences(item.id)}
+                                >
+                                  <span className="flex items-center gap-2">
+                                    {referenceVisibility[item.id] ? (
+                                      <ChevronDown className="w-4 h-4" />
+                                    ) : (
+                                      <ChevronRight className="w-4 h-4" />
+                                    )}
+                                    <BookOpen className="w-4 h-4" />
+                                    Sources ({item.references.length})
+                                  </span>
+                                </Button>
+                                {referenceVisibility[item.id] && (
+                                  <div className="rounded-2xl border border-border bg-secondary/30 px-4 py-3 text-xs text-muted-foreground space-y-1">
+                                    {item.references.map((ref) => (
+                                      <div key={`${item.id}-${ref}`} className="leading-relaxed">
+                                        {ref}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             <span className="text-[10px] text-muted-foreground">
                               {formatTimestamp(item.createdAt)}
                             </span>

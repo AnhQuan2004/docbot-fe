@@ -15,10 +15,19 @@ interface SidebarProps {
   activeTab: "conversations" | "documents";
   onTabChange: (tab: "conversations" | "documents") => void;
   conversations: Conversation[];
+  activeConversationId: string;
   onNewConversation: () => void;
+  onSelectConversation: (id: string) => void;
 }
 
-export const Sidebar = ({ activeTab, onTabChange, conversations, onNewConversation }: SidebarProps) => {
+export const Sidebar = ({
+  activeTab,
+  onTabChange,
+  conversations,
+  activeConversationId,
+  onNewConversation,
+  onSelectConversation,
+}: SidebarProps) => {
   return (
     <aside className="w-64 border-r border-border bg-background flex flex-col h-screen">
       {/* Header */}
@@ -101,7 +110,13 @@ export const Sidebar = ({ activeTab, onTabChange, conversations, onNewConversati
               {conversations.map((conversation) => (
                 <button
                   key={conversation.id}
-                  className="w-full p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-secondary/50 transition-all text-left group"
+                  onClick={() => onSelectConversation(conversation.id)}
+                  className={cn(
+                    "w-full p-3 rounded-lg border transition-all text-left group",
+                    conversation.id === activeConversationId
+                      ? "border-primary/50 bg-secondary/50"
+                      : "border-border hover:border-primary/50 hover:bg-secondary/50"
+                  )}
                 >
                   <div className="flex items-start gap-2">
                     <MessageSquare className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
